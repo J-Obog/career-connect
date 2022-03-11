@@ -1,38 +1,54 @@
 import time
-import dotenv
-import os
-import scrapers
-from selenium import webdriver
+import re
+from bs4 import BeautifulSoup
 
-dotenv.load_dotenv()
+BASE_URL = 'https://www.linkedin.com'
+LOGIN_URL = f'{BASE_URL}/uas/login?session_redirect=%2Fvoyager%2FloginRedirect%2Ehtml&amp;fromSignIn=true&amp;trk=uno-reg-join-sign-in'
+SEARCH_URL = f'{BASE_URL}/search/results/people'
 
-connections = {}
-profiles = {}
-companies = {}
-companies = ['Google']
+class LinkedInScraper:
+    def __init__(self, driver, username, password): 
+        self._driver = driver
+        self._login(username, password)
 
-options = webdriver.ChromeOptions()
-options.add_experimental_option('excludeSwitches', ['enable-logging'])
-driver = webdriver.Chrome(executable_path='chrome/chromedriver.exe', options=options)
+    def _login(self, username, password):
+        self._driver.get(LOGIN_URL)
+        self._driver.find_element_by_xpath('//input[@id="username"]').send_keys(username)
+        self._driver.find_element_by_xpath('//input[@id="password"]').send_keys(password)
+        self._driver.find_element_by_xpath('//button[@class= "btn__primary--large from__button--floating"]').click()
 
-# --- login ---
-driver.get('https://www.linkedin.com/uas/login?session_redirect=%2Fvoyager%2FloginRedirect%2Ehtml&amp;fromSignIn=true&amp;trk=uno-reg-join-sign-in')
-driver.find_element_by_xpath('//input[@id="username"]').send_keys(os.environ.get('LINKEDIN_USER'))
-driver.find_element_by_xpath('//input[@id="password"]').send_keys(os.environ.get('LINKEDIN_PASS'))
-driver.find_element_by_xpath('//button[@class= "btn__primary--large from__button--floating"]').click()
+    def _parse_total_results(self):
+        try:
+            soup = BeautifulSoup(self._driver.page_source, 'html.parser')
+            heading = soup.find('h2', {'class': 'pb2 t-black--light t-14'})
+            return int(re.sub('About|results|\,', '', heading.text).strip())
+        except AttributeError:
+            return 0
 
-for company in companies:
-    page = 1
-    max_page = 3
+    def _parse_search_results(self):
+        try:
+            soup = BeautifulSoup(self._driver.page_source, 'html.parser')
+            spans = soup.find_all('span', {'class': 'entity-result__title-text t-16'})
+            return [re.split('https://www.linkedin.com/in/|\?', span.find('a')['href'])[1] for span in spans]
+        except AttributeError:
+            return None
 
-    while True:
-        driver.get(f'https://www.linkedin.com/search/results/people/?company={company}&page={page}&title=Software%20Engineer%20Intern')
-        r = scrapers.parse_search_results(driver.page_source)
-        if not r or page == max_page:
-            break
-        print(r)
-        page += 1
-        
+    def parse_search_results(self, company, title, max_results = 150):
+        self._driver.get(f"{SEARCH_URL}?company={company.replace(' ', '%20')}&title={title.replace(' ', '%20')}")
+        total_results = self._parse_total_results()
+        pages = min(max_results, total_results)//10
+        uids = []
 
-time.sleep(1)
-#driver.quit()
+        for page in range(1, pages + 1):
+            self._driver.get(f"{SEARCH_URL}?company={company.replace(' ', '%20')}&page={page}&title={title.replace(' ', '%20')}")
+            uids.extend(self._parse_search_results())
+
+        return uids
+
+
+    def end(self):
+        self._driver.quit()
+
+
+
+
